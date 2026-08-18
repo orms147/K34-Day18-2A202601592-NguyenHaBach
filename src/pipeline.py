@@ -10,7 +10,7 @@ from src.m1_chunking import load_documents, chunk_hierarchical
 from src.m2_search import HybridSearch
 from src.m3_rerank import CrossEncoderReranker
 from src.m4_eval import load_test_set, evaluate_ragas, failure_analysis, save_report
-from src.m5_enrichment import enrich_chunks
+from src.m5_enrichment import enrich_chunks, _call_openrouter
 from config import RERANK_TOP_K
 
 
@@ -27,8 +27,18 @@ def build_pipeline():
     all_chunks = []
     for doc in docs:
         parents, children = chunk_hierarchical(doc["text"], metadata=doc["metadata"])
+        parent_texts = {
+            parent.metadata["parent_id"]: parent.text for parent in parents
+        }
         for child in children:
-            all_chunks.append({"text": child.text, "metadata": {**child.metadata, "parent_id": child.parent_id}})
+            all_chunks.append({
+                "text": child.text,
+                "metadata": {
+                    **child.metadata,
+                    "parent_id": child.parent_id,
+                    "parent_text": parent_texts.get(child.parent_id, child.text),
+                },
+            })
     print(f"  ✓ {len(all_chunks)} chunks from {len(docs)} documents ({time.time()-t0:.1f}s)", flush=True)
 
     # Step 2: Enrichment (M5)
@@ -62,19 +72,21 @@ def run_query(query: str, search: HybridSearch, reranker: CrossEncoderReranker) 
     results = search.search(query)
     docs = [{"text": r.text, "score": r.score, "metadata": r.metadata} for r in results]
     reranked = reranker.rerank(query, docs, top_k=RERANK_TOP_K)
-    contexts = [r.text for r in reranked] if reranked else [r.text for r in results[:3]]
+    selected = reranked if reranked else results[:3]
+    contexts = []
+    for result in selected:
+        parent_text = result.metadata.get("parent_text", result.text)
+        if parent_text not in contexts:
+            contexts.append(parent_text)
 
     from config import OPENAI_API_KEY
     if OPENAI_API_KEY and contexts:
         try:
-            from openai import OpenAI
-            client = OpenAI()
             context_str = "\n\n".join(contexts)
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=[
+            answer = _call_openrouter([
                 {"role": "system", "content": "Trả lời CHỈ dựa trên context. Nếu không có → nói 'Không tìm thấy.'"},
                 {"role": "user", "content": f"Context:\n{context_str}\n\nCâu hỏi: {query}"},
-            ])
-            answer = resp.choices[0].message.content
+            ], max_tokens=300)
         except Exception as e:
             print(f"  ⚠️  LLM generation failed: {e}", flush=True)
             answer = contexts[0]
@@ -115,6 +127,9 @@ def evaluate_pipeline(search: HybridSearch, reranker: CrossEncoderReranker):
 
 
 if __name__ == "__main__":
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     start = time.time()
     search, reranker = build_pipeline()
     evaluate_pipeline(search, reranker)

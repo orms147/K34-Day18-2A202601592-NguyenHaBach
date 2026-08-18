@@ -7,8 +7,16 @@ Chạy: python check_lab.py
 
 import json
 import os
+import re
 import sys
 import subprocess
+
+
+def _configure_console() -> None:
+    """Keep validation output readable on Windows cp1252 consoles."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def check_file(path: str, required: bool = True) -> bool:
@@ -58,17 +66,16 @@ def run_tests() -> tuple[int, int]:
             [sys.executable, "-m", "pytest", "tests/", "-v", "--tb=no", "-q"],
             capture_output=True, text=True, timeout=120,
         )
-        lines = result.stdout.strip().split("\n")
-        summary = lines[-1] if lines else ""
-        # Parse "X passed, Y failed" or "X passed"
-        passed = total = 0
-        for part in summary.split(","):
-            part = part.strip()
-            if "passed" in part:
-                passed = int(part.split()[0])
-                total += passed
-            if "failed" in part:
-                total += int(part.split()[0])
+        output = f"{result.stdout}\n{result.stderr}"
+        passed_match = re.search(r"(\d+)\s+passed", output)
+        failed_match = re.search(r"(\d+)\s+failed", output)
+        skipped_match = re.search(r"(\d+)\s+(?:skipped|deselected)", output)
+        error_match = re.search(r"(\d+)\s+errors?", output)
+        passed = int(passed_match.group(1)) if passed_match else 0
+        total = passed
+        for match in (failed_match, skipped_match, error_match):
+            if match:
+                total += int(match.group(1))
         return passed, total
     except Exception as e:
         print(f"  ⚠️  pytest error: {e}")
@@ -139,4 +146,5 @@ def validate():
 
 
 if __name__ == "__main__":
+    _configure_console()
     validate()

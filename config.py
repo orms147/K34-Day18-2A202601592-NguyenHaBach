@@ -6,8 +6,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- API Keys ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENAI_API_KEY = OPENROUTER_API_KEY or os.getenv("OPENAI_API_KEY", "")
 
+if OPENROUTER_API_KEY:
+    os.environ["OPENAI_API_KEY"] = OPENROUTER_API_KEY
+    os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
 # --- Qdrant ---
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
